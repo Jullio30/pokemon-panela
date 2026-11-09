@@ -59,11 +59,14 @@ create index if not exists votes_pokemon_idx on public.votes (pokemon_id);
 create table if not exists public.pokemon_stats (
   pokemon_id     integer primary key references public.pokemon_catalog (pokemon_id) on delete cascade,
   total_votes    integer not null default 0,
+  panela_votes   integer not null default 0,
   sum_score      integer not null default 0,
   avg_score      numeric(6,4) not null default 0,
   bayesian_score numeric(6,4) not null default 0,
   updated_at     timestamptz not null default now()
 );
+alter table public.pokemon_stats add column if not exists panela_votes integer not null default 0;
+
 create index if not exists pokemon_stats_rank_idx
   on public.pokemon_stats (bayesian_score desc, avg_score desc, total_votes desc);
 
@@ -98,7 +101,7 @@ create table if not exists public.vote_rate_buckets (
 
 create table if not exists public.app_settings (
   id                   boolean primary key default true check (id),
-  min_qualified_votes  integer not null default 20,
+  min_qualified_votes  integer not null default 25,
   bayes_prior          numeric(6,4) not null default 3.0,
   bayes_weight         integer not null default 25,
   max_votes_per_minute integer not null default 120,
@@ -168,15 +171,15 @@ declare
 begin
   perform pg_advisory_xact_lock(727001, p_id);
   select * into s from public.app_settings where id;
-  insert into public.pokemon_stats as t (pokemon_id, total_votes, sum_score, avg_score, bayesian_score, updated_at)
-  select p_id, count(*), coalesce(sum(v.score), 0), coalesce(avg(v.score), 0),
+  insert into public.pokemon_stats as t (pokemon_id, total_votes, panela_votes, sum_score, avg_score, bayesian_score, updated_at)
+  select p_id, count(*), count(*) filter (where v.score >= 4), coalesce(sum(v.score), 0), coalesce(avg(v.score), 0),
          (s.bayes_weight * s.bayes_prior + coalesce(sum(v.score), 0)) / (s.bayes_weight + count(*)),
          now()
   from public.votes v
   join public.profiles p on p.id = v.user_id
   where v.pokemon_id = p_id and p.is_qualified and not p.is_banned
   on conflict (pokemon_id) do update set
-    total_votes = excluded.total_votes, sum_score = excluded.sum_score, avg_score = excluded.avg_score,
+    total_votes = excluded.total_votes, panela_votes = excluded.panela_votes, sum_score = excluded.sum_score, avg_score = excluded.avg_score,
     bayesian_score = excluded.bayesian_score, updated_at = excluded.updated_at;
 end $$;
 
@@ -467,19 +470,22 @@ end $$;
 -- ---------------------------------------------------------------------
 -- RANKINGS
 -- ---------------------------------------------------------------------
+drop function if exists public.get_global_ranking(integer, text, text, text, integer, integer);
+drop function if exists public.get_friends_ranking(integer, integer, text, text, text, integer, integer);
+
 create or replace function public.get_global_ranking(
   p_generation integer default null, p_type text default null, p_category text default null,
-  p_search text default null, p_limit integer default 50, p_offset integer default 0
-) returns table (rank_position bigint, pokemon_id integer, total_votes integer, avg_score numeric, bayesian_score numeric, total_count bigint)
+  p_search text default null, p_limit integer default 50, p_offset integer default 0, p_sort text default 'score'
+) returns table (rank_position bigint, pokemon_id integer, total_votes integer, panela_votes integer, avg_score numeric, bayesian_score numeric, total_count bigint)
 language sql stable security definer set search_path = public, pg_temp as $$
   with eligible as (
-    select s.pokemon_id, s.total_votes, s.avg_score, s.bayesian_score, c as cat,
-           row_number() over (order by s.bayesian_score desc, s.avg_score desc, s.total_votes desc, s.pokemon_id) as rk
+    select s.pokemon_id, s.total_votes, s.panela_votes, s.avg_score, s.bayesian_score, c as cat,
+           row_number() over (order by case when p_sort = 'panela' then s.panela_votes end desc nulls last, s.bayesian_score desc, s.avg_score desc, s.total_votes desc, s.pokemon_id) as rk
     from public.pokemon_stats s
     join public.pokemon_catalog c on c.pokemon_id = s.pokemon_id
-    where s.total_votes >= 25 and c.is_active
+    where s.total_votes >= 1 and c.is_active and (p_sort is distinct from 'panela' or s.panela_votes > 0)
   )
-  select e.rk, e.pokemon_id, e.total_votes, e.avg_score, e.bayesian_score, count(*) over ()
+  select e.rk, e.pokemon_id, e.total_votes, e.panela_votes, e.avg_score, e.bayesian_score, count(*) over ()
   from eligible e
   where public.catalog_matches(e.cat, p_generation, p_type, p_category, p_search)
   order by e.rk
@@ -488,25 +494,26 @@ $$;
 
 create or replace function public.get_friends_ranking(
   p_min_votes integer default 2, p_generation integer default null, p_type text default null,
-  p_category text default null, p_search text default null, p_limit integer default 50, p_offset integer default 0
-) returns table (rank_position bigint, pokemon_id integer, total_votes integer, avg_score numeric, total_count bigint)
+  p_category text default null, p_search text default null, p_limit integer default 50, p_offset integer default 0, p_sort text default 'score'
+) returns table (rank_position bigint, pokemon_id integer, total_votes integer, panela_votes integer, avg_score numeric, total_count bigint)
 language plpgsql stable security definer set search_path = public, pg_temp as $$
 begin
   if auth.uid() is null then raise exception 'not_authenticated' using errcode = '28000'; end if;
   return query
   with agg as (
-    select v.pokemon_id as pid, count(*)::integer as n, avg(v.score) as a
+    select v.pokemon_id as pid, count(*)::integer as n, (count(*) filter (where v.score >= 4))::integer as pn, avg(v.score) as a
     from public.votes v
     join public.profiles p on p.id = v.user_id and not p.is_banned
     where v.user_id in (select public.friend_group_ids(auth.uid()))
     group by v.pokemon_id
     having count(*) >= greatest(coalesce(p_min_votes, 2), 1)
   ), ranked as (
-    select a.pid, a.n, a.a, c as cat,
-           row_number() over (order by a.a desc, a.n desc, a.pid) as rk
+    select a.pid, a.n, a.pn, a.a, c as cat,
+           row_number() over (order by case when p_sort = 'panela' then a.pn end desc nulls last, a.a desc, a.n desc, a.pid) as rk
     from agg a join public.pokemon_catalog c on c.pokemon_id = a.pid and c.is_active
+    where p_sort is distinct from 'panela' or a.pn > 0
   )
-  select r.rk, r.pid, r.n, round(r.a, 4), count(*) over ()
+  select r.rk, r.pid, r.n, r.pn, round(r.a, 4), count(*) over ()
   from ranked r
   where public.catalog_matches(r.cat, p_generation, p_type, p_category, p_search)
   order by r.rk
@@ -522,7 +529,7 @@ language sql stable security definer set search_path = public, pg_temp as $$
            row_number() over (order by s.bayesian_score desc, s.avg_score desc, s.total_votes desc, s.pokemon_id) as rk
     from public.pokemon_stats s
     join public.pokemon_catalog c on c.pokemon_id = s.pokemon_id and c.is_active
-    where s.total_votes >= 25
+    where s.total_votes >= 1
   ), f as (
     select v.pokemon_id as pid, count(*)::integer as n, round(avg(v.score), 4) as a,
            row_number() over (order by avg(v.score) desc, count(*) desc, v.pokemon_id) as rk
@@ -660,22 +667,22 @@ begin
   update public.app_settings set bayes_prior = round(coalesce(v_prior, 3.0), 4) where id returning * into s;
 
   with agg as (
-    select v.pokemon_id as pid, count(*)::integer as n, sum(v.score)::integer as total, avg(v.score) as a
+    select v.pokemon_id as pid, count(*)::integer as n, (count(*) filter (where v.score >= 4))::integer as pn, sum(v.score)::integer as total, avg(v.score) as a
     from public.votes v join public.profiles p on p.id = v.user_id
     where p.is_qualified and not p.is_banned
     group by v.pokemon_id
   ), computed as (
-    select c.pokemon_id, coalesce(a.n, 0) as n, coalesce(a.total, 0) as total, coalesce(a.a, 0) as a,
+    select c.pokemon_id, coalesce(a.n, 0) as n, coalesce(a.pn, 0) as pn, coalesce(a.total, 0) as total, coalesce(a.a, 0) as a,
            (s.bayes_weight * s.bayes_prior + coalesce(a.total, 0)) / (s.bayes_weight + coalesce(a.n, 0)) as b
     from public.pokemon_catalog c left join agg a on a.pid = c.pokemon_id
   ), diff as (
     select c.* from computed c left join public.pokemon_stats t on t.pokemon_id = c.pokemon_id
     where coalesce(t.total_votes, 0) <> c.n or coalesce(t.sum_score, 0) <> c.total
   ), up as (
-    insert into public.pokemon_stats as t (pokemon_id, total_votes, sum_score, avg_score, bayesian_score, updated_at)
-    select pokemon_id, n, total, a, b, now() from computed
+    insert into public.pokemon_stats as t (pokemon_id, total_votes, panela_votes, sum_score, avg_score, bayesian_score, updated_at)
+    select pokemon_id, n, pn, total, a, b, now() from computed
     on conflict (pokemon_id) do update set
-      total_votes = excluded.total_votes, sum_score = excluded.sum_score, avg_score = excluded.avg_score,
+      total_votes = excluded.total_votes, panela_votes = excluded.panela_votes, sum_score = excluded.sum_score, avg_score = excluded.avg_score,
       bayesian_score = excluded.bayesian_score, updated_at = excluded.updated_at
     returning 1
   )
@@ -715,7 +722,7 @@ drop policy if exists catalog_read on public.pokemon_catalog;
 create policy catalog_read on public.pokemon_catalog for select to anon, authenticated using (true);
 
 drop policy if exists stats_read on public.pokemon_stats;
-create policy stats_read on public.pokemon_stats for select to anon, authenticated using (total_votes >= 25);
+create policy stats_read on public.pokemon_stats for select to anon, authenticated using (total_votes >= 1);
 
 drop policy if exists profiles_read on public.profiles;
 create policy profiles_read on public.profiles for select to anon, authenticated
@@ -786,7 +793,7 @@ end $$;
 
 grant execute on function public.is_admin() to anon, authenticated;
 grant execute on function public.is_banned(uuid) to anon, authenticated;
-grant execute on function public.get_global_ranking(integer, text, text, text, integer, integer) to anon, authenticated;
+grant execute on function public.get_global_ranking(integer, text, text, text, integer, integer, text) to anon, authenticated;
 grant execute on function public.get_form_comparison(integer) to anon, authenticated;
 grant execute on function public.get_public_profile(text) to anon, authenticated;
 grant execute on function public.get_my_account() to authenticated;
@@ -796,11 +803,27 @@ grant execute on function public.get_my_friends() to authenticated;
 grant execute on function public.send_friend_request(uuid) to authenticated;
 grant execute on function public.respond_friend_request(bigint, boolean) to authenticated;
 grant execute on function public.remove_friendship(bigint) to authenticated;
-grant execute on function public.get_friends_ranking(integer, integer, text, text, text, integer, integer) to authenticated;
+grant execute on function public.get_friends_ranking(integer, integer, text, text, text, integer, integer, text) to authenticated;
 grant execute on function public.admin_list_users(text, integer, integer) to authenticated;
 grant execute on function public.admin_set_ban(uuid, boolean, text) to authenticated;
 grant execute on function public.admin_set_form_active(integer, boolean) to authenticated;
 grant execute on function public.recalculate_all_pokemon_stats() to authenticated;
 grant execute on function public.admin_get_audit_logs(integer, integer) to authenticated;
+
+-- ---------------------------------------------------------------------
+-- ATUALIZAÇÃO ÚNICA: bancos criados com o mínimo antigo de 20 votos por conta
+-- ---------------------------------------------------------------------
+do $$
+declare
+  r record;
+begin
+  if (select min_qualified_votes from public.app_settings where id) = 20 then
+    update public.app_settings set min_qualified_votes = 25 where id;
+    update public.profiles set is_qualified = vote_count >= 25;
+    for r in select pokemon_id from public.pokemon_catalog order by 1 loop
+      perform public.refresh_pokemon_stats(r.pokemon_id);
+    end loop;
+  end if;
+end $$;
 
 commit;

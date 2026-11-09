@@ -43,7 +43,7 @@ Ficam na tabela `public.app_settings`:
 
 | Coluna | Padrão | Função |
 | --- | --- | --- |
-| `min_qualified_votes` | 20 | Votos para a conta contar no ranking global |
+| `min_qualified_votes` | 25 | Votos para a conta contar no ranking global |
 | `bayes_weight` | 25 | Peso do prior bayesiano |
 | `bayes_prior` | 3.0 | Média a priori; o recálculo admin a atualiza |
 | `max_votes_per_minute` | 120 | Limite de votos por minuto |
