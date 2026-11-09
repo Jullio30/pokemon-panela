@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data: blob: https://raw.githubusercontent.com; connect-src 'self' https://*.supabase.co wss://*.supabase.co; base-uri 'none'; form-action 'none'">
+  <meta name="referrer" content="strict-origin-when-cross-origin">
+  <meta name="description" content="Avalie todos os Pokémon, compare formas e monte o ranking da sua panela.">
+  <title>Pokémon Panela</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Press+Start+2P&family=VT323&display=swap">
+  <link rel="stylesheet" href="css/firered-theme.css">
+  <link rel="stylesheet" href="css/components.css">
+  <script defer src="js/vendor/supabase.min.js"></script>
+  <script type="module" src="js/app.js"></script>
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="#arena">Pokémon Panela</a>
+    <nav id="nav" aria-label="Principal"></nav>
+  </header>
+  <main id="view" class="page">
+    <p class="center">Carregando...</p>
+  </main>
+  <footer class="footer">Projeto de fã, sem fins lucrativos e sem vínculo com Nintendo, Game Freak ou The Pokémon Company. Dados e sprites: PokéAPI.</footer>
+  <div id="toasts" class="toasts" aria-live="polite"></div>
+  <noscript>O Pokémon Panela precisa de JavaScript.</noscript>
+</body>
+</html>

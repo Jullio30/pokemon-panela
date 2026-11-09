@@ -1,0 +1,8 @@
+{
+  "name": "pokemon-panela",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build:catalog": "node scripts/build-catalog.js"
+  }
+}
