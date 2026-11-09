@@ -22,7 +22,7 @@ const cloudNotice = () => h('div', { class: 'window center' },
 
 // ---------------- RANKINGS ----------------
 export function renderRankings(container) {
-  const f = { tab: 'global', generation: '', type: '', category: '', search: '', minVotes: 2, offset: 0 };
+  const f = { tab: 'global', generation: '', type: '', category: '', search: '', minVotes: 2, sort: 'score', offset: 0 };
   const body = h('div', { class: 'stack' });
   const tabs = h('div', { class: 'tabs' });
   const controls = h('div', { class: 'filters' });
@@ -46,6 +46,7 @@ export function renderRankings(container) {
       p_search: f.search || null,
       p_limit: PAGE,
       p_offset: f.offset,
+      p_sort: f.sort,
     };
     const { data, error } = f.tab === 'global'
       ? await supabase.rpc('get_global_ranking', shared)
@@ -57,7 +58,7 @@ export function renderRankings(container) {
     }
     if (!data.length) {
       body.replaceChildren(h('div', { class: 'window center' }, h('p', {},
-        f.tab === 'global' ? 'Nada aqui ainda: uma forma entra no ranking com 25 votos de contas qualificadas.' : 'Nenhum Pokémon atingiu o mínimo de votos no grupo.')));
+        f.tab === 'global' ? 'Nada aqui ainda: o ranking conta os votos de contas com 25 votos ou mais.' : 'Nenhum Pokémon atingiu o mínimo de votos no grupo.')));
       return;
     }
     const isGlobal = f.tab === 'global';
@@ -71,6 +72,7 @@ export function renderRankings(container) {
         h('td', { class: 'hide-sm' }, typeBadges(e)),
         isGlobal && h('td', { class: 'num' }, fmt(r.bayesian_score, 3)),
         h('td', { class: 'num' }, fmt(r.avg_score)),
+        h('td', { class: 'num' }, String(r.panela_votes)),
         h('td', { class: 'num' }, String(r.total_votes)),
         h('td', {}, tierBadge(getVote(e.id))));
     });
@@ -78,7 +80,7 @@ export function renderRankings(container) {
       h('div', { class: 'window table-wrap' }, h('table', { class: 'data' },
         h('thead', {}, h('tr', {},
           h('th', {}, 'Pos'), h('th', {}, ''), h('th', {}, 'Nome'), h('th', { class: 'hide-sm' }, 'Tipo'),
-          isGlobal && h('th', {}, 'Score'), h('th', {}, 'Média'), h('th', {}, 'Votos'), h('th', {}, 'Você'))),
+          isGlobal && h('th', {}, 'Score'), h('th', {}, 'Média'), h('th', { title: 'Votos S e A' }, 'Panela'), h('th', {}, 'Votos'), h('th', {}, 'Você'))),
         h('tbody', {}, rows))),
       pager(f.offset, PAGE, Number(data[0].total_count), (offset) => { f.offset = offset; load(); }),
     );
@@ -97,6 +99,7 @@ export function renderRankings(container) {
     );
     fill(controls,
       h('input', { type: 'search', placeholder: 'Nome ou #001', value: f.search, 'aria-label': 'Buscar', onInput: (e) => debouncedSearch(e.target.value) }),
+      select(f.sort, [['score', 'Melhor nota'], ['panela', 'Mais na panela']], (sort) => update({ sort }), 'Ordenar'),
       select(f.generation, GEN_OPTIONS, (generation) => update({ generation }), 'Geração'),
       select(f.type, TYPE_OPTIONS, (type) => update({ type }), 'Tipo'),
       select(f.category, CATEGORY_OPTIONS, (category) => update({ category }), 'Categoria'),
