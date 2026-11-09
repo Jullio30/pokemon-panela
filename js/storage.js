@@ -11,6 +11,7 @@ let mode = 'guest';
 let userId = null;
 let votes = new Map(); // pokemon_id -> { s: nota, t: epoch ms }
 let writeChain = Promise.resolve();
+let pendingWrites = 0;
 
 function readGuest() {
   try {
@@ -76,6 +77,7 @@ export async function reloadCloud() {
 }
 
 function enqueue(write) {
+  pendingWrites += 1;
   writeChain = writeChain.then(async () => {
     const { error } = await write();
     if (error) throw error;
@@ -84,9 +86,16 @@ function enqueue(write) {
     try {
       await reloadCloud(); // volta ao estado confirmado no servidor
     } catch { /* continua offline */ }
+  }).finally(() => {
+    pendingWrites -= 1;
   });
   return writeChain;
 }
+
+// Avisa antes de fechar a página com votos ainda a caminho do servidor.
+window.addEventListener('beforeunload', (e) => {
+  if (pendingWrites > 0) e.preventDefault();
+});
 
 export const storeMode = () => mode;
 export const getVote = (id) => votes.get(id)?.s ?? null;

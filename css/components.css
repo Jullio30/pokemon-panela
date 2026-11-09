@@ -41,6 +41,7 @@
 }
 .vote-btn b { font: 22px/1 var(--font-title); }
 .vote-btn:hover { filter: brightness(1.1); }
+.vote-grid.is-locked .vote-btn { opacity: .6; cursor: default; pointer-events: none; }
 .vote-btn:active { transform: translate(3px, 3px); box-shadow: none; }
 .arena-config select, .arena-config .btn { width: 100%; }
 .check { display: flex; align-items: center; gap: 8px; }

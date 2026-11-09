@@ -1,11 +1,12 @@
 // Arena de votação: fila, ordem, teclado e pilha de undo.
-import { filtered, ordered, progress } from './catalog.js';
+import { filtered, ordered, progress, spriteUrl } from './catalog.js';
 import { getVote, hasVote, setVote, deleteVote, storeMode } from './storage.js';
 import { h, fill, sprite, typeBadges, dexLabel, TIERS, select } from './ui.js';
 
 const SETTINGS_KEY = 'panela_settings_v1';
 const SEED_KEY = 'panela_seed_v1';
 const UNDO_LIMIT = 200;
+const SWITCH_DELAY_MS = 600;
 
 const defaults = {
   journey: 'full', generation: 1, order: 'dex', forms: 'all', groups: { regional: true, mega: true, special: true },
@@ -20,6 +21,9 @@ let pinned = null;
 let active = false;
 let stage = null;
 let keyboardBound = false;
+let shownId = null;
+let lockedUntil = 0;
+let lockTimer = null;
 
 function loadSettings() {
   try {
@@ -65,9 +69,11 @@ function current() {
   return queue.find((e) => !hasVote(e.id) && !skipped.has(e.id)) ?? null;
 }
 
+const isLocked = () => Date.now() < lockedUntil;
+
 function vote(score) {
   const entry = current();
-  if (!entry) return;
+  if (!entry || isLocked()) return;
   undoStack.push({ id: entry.id, prev: getVote(entry.id) });
   if (undoStack.length > UNDO_LIMIT) undoStack.shift();
   pinned = null;
@@ -78,7 +84,7 @@ function vote(score) {
 
 function skip() {
   const entry = current();
-  if (!entry) return;
+  if (!entry || isLocked()) return;
   pinned = null;
   skipped.add(entry.id);
   renderStage();
@@ -94,8 +100,21 @@ function undo() {
 }
 
 function preloadNext(entry) {
-  const next = queue.find((e) => e !== entry && !hasVote(e.id) && !skipped.has(e.id));
-  if (next) sprite(next);
+  const next = queue.filter((e) => e !== entry && !hasVote(e.id) && !skipped.has(e.id)).slice(0, 3);
+  for (const e of next) new Image().src = spriteUrl(e);
+}
+
+/** Trava voto e pulo por um instante sempre que outro Pokémon aparece. */
+function applySwitchLock(entry, grid) {
+  clearTimeout(lockTimer);
+  if (entry.id !== shownId) {
+    shownId = entry.id;
+    lockedUntil = Date.now() + SWITCH_DELAY_MS;
+  }
+  const remaining = lockedUntil - Date.now();
+  if (remaining <= 0) return;
+  grid.classList.add('is-locked');
+  lockTimer = setTimeout(() => grid.classList.remove('is-locked'), remaining);
 }
 
 function renderStage() {
@@ -126,21 +145,25 @@ function renderStage() {
   }
 
   preloadNext(entry);
+  const art = sprite(entry, 'sprite sprite-xl');
+  art.loading = 'eager';
+  const grid = h('div', { class: 'vote-grid' }, TIERS.map((t) => h('button', {
+    type: 'button',
+    class: `vote-btn tier-${t.code}`,
+    'aria-label': `${t.code}: ${t.label}`,
+    onClick: (e) => { e.currentTarget.blur(); vote(t.score); },
+  }, h('kbd', {}, String(t.score)), h('b', {}, t.code), h('span', {}, t.label))));
+  applySwitchLock(entry, grid);
   stage.replaceChildren(
     header,
     h('div', { class: 'window arena-card' },
-      h('div', { class: 'arena-sprite' }, sprite(entry, 'sprite sprite-xl')),
+      h('div', { class: 'arena-sprite' }, art),
       h('div', { class: 'dialogue' },
         h('p', { class: 'dex' }, dexLabel(entry.dex)),
         h('h2', { id: 'arena-name' }, entry.name),
         typeBadges(entry),
         h('p', {}, 'Vai para a panela?'))),
-    h('div', { class: 'vote-grid' }, TIERS.map((t) => h('button', {
-      type: 'button',
-      class: `vote-btn tier-${t.code}`,
-      'aria-label': `${t.code}: ${t.label}`,
-      onClick: (e) => { e.currentTarget.blur(); vote(t.score); },
-    }, h('kbd', {}, String(t.score)), h('b', {}, t.code), h('span', {}, t.label)))),
+    grid,
     h('div', { class: 'row center-row' },
       h('button', { type: 'button', class: 'btn', onClick: (e) => { e.currentTarget.blur(); skip(); } }, 'Pular (Espaço)'),
       h('button', { type: 'button', class: 'btn', disabled: undoStack.length === 0, onClick: (e) => { e.currentTarget.blur(); undo(); } }, 'Desfazer (Z)')),
